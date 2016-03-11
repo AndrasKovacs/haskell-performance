@@ -35,4 +35,4 @@ executable effects
 
 source-repository head
   type:     git
-  location: https://github.com/githubuser/haskell-performance
+  location: https://github.com/AndrasKovacs/haskell-performance
