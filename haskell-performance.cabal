@@ -28,8 +28,24 @@ executable effects
 
   build-depends:       base
                      , criterion
-                     , ghc-prim >= 0.4.0.0
                      , freer == 0.2.2.4
+                     , ghc-prim >= 0.4.0.0
+                     , mtl >= 2.2.1
+                     , lens
+
+executable lambda-reduce
+  hs-source-dirs:      .
+  main-is:             LambdaReduce.hs
+  ghc-options:         -rtsopts -O2 -fllvm
+
+  build-depends:       base
+                     , criterion
+                     , ghc-prim >= 0.4.0.0
+                     , bound
+                     , megaparsec
+                     , containers
+                     , unordered-containers
+                     , prelude-extras
 
   default-language:    Haskell2010
 
