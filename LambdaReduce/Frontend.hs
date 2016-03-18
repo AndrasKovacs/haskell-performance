@@ -1,7 +1,7 @@
 
-module FrontEnd (
+module Frontend (
     RawTerm(..)
-  , FrontEnd.parse
+  , Frontend.parse
   , scopeCheck
   ) where
 
