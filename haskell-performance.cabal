@@ -34,7 +34,7 @@ executable effects
                      , lens
 
 executable lambda-reduce
-  hs-source-dirs:      .
+  hs-source-dirs:      LambdaReduce
   main-is:             LambdaReduce.hs
   ghc-options:         -rtsopts -O2 -fllvm
 
