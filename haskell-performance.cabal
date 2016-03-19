@@ -36,12 +36,14 @@ executable effects
 executable lambda-reduce
   hs-source-dirs:      LambdaReduce
   main-is:             LambdaReduce.hs
+  other-modules:       Bloom, Frontend, UState
   ghc-options:         -rtsopts -O2 -fllvm
 
   build-depends:       base
                      , criterion
                      , ghc-prim >= 0.4.0.0
                      , bound
+                     , mtl
                      , megaparsec
                      , containers
                      , unordered-containers

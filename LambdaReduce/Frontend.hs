@@ -2,7 +2,6 @@
 module Frontend (
     RawTerm(..)
   , Frontend.parse
-  , scopeCheck
   ) where
 
 import Control.Monad
@@ -43,18 +42,7 @@ lam     = lamSym *> (flip (foldr Lam) <$> (some ident <* symbol ".") <*> term)
 apps    = foldl1 App <$> some ((Var <$> ident) <|> parens term)
 term    = lam <|> letBind <|> apps
 
--- | Fail on the first scope error, return the missing variable.
-scopeCheck :: RawTerm -> Maybe String
-scopeCheck = go S.empty where
-  go s (Var v)   = v <$ guard (not $ S.member v s)
-  go s (Lam v t) = go (S.insert v s) t
-  go s (App f x) = go s f <|> go s x
-
 parse :: String -> Either String RawTerm
-parse str = do
-  t <- first show $ Text.Megaparsec.parse term "" str
-  maybe (pure t)
-    (\v -> Left $ "Variable not in scope: " ++ v)
-    (scopeCheck t)
+parse = first show . Text.Megaparsec.parse term ""
 
  

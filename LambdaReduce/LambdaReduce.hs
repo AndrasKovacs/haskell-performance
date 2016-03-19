@@ -1,5 +1,9 @@
+module Main (
+    main
+  , module Bloom
+  ) where
 
-import Frontend
+import Bloom
 
 main = pure ()
 
