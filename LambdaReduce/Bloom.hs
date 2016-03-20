@@ -27,26 +27,27 @@ of course not for the other bindings. We only propagate actually used variables.
 This should also let us recover some benefits of call-by-need, since we can avoid
 reducing arguments of consant functions, if constantness is indicated by the
 Bloom filter.
+
+Of course this isn't an API we'd like to present. Ideally 'Bloom' filters should
+not be visible at all to programmers.
 -}
 
 {-# language
   GeneralizedNewtypeDeriving, PatternSynonyms, BangPatterns,
-  LambdaCase, CPP, FlexibleInstances, FlexibleContexts #-}
+  LambdaCase, FlexibleInstances, FlexibleContexts #-}
+
+-- OPTIMIZATIONS:
+-- reduce usage of bloom in subst/rename
+-- try to unbox state monad in hsubst
 
 module Bloom where
 
-import Control.Applicative
-import Control.Monad
+import Data.Bifunctor
 import Data.Bits
-import Data.Foldable
-import Data.Int
-import Data.Maybe
-import Data.Bool
+import Debug.Trace
 
 -- TODO: hybrid data structure that uses an association vector when small
 -- and switches to IntMap when large
-import Data.IntMap.Strict ((!), IntMap)
-import qualified Data.IntMap as IM
 import qualified Data.HashMap.Strict as HM
 
 import Data.IntSet (IntSet)
@@ -57,12 +58,8 @@ import Control.Monad.State.Strict
 
 type Name = Int
 
-#include "MachDeps.h"
-#if SIZEOF_HSINT == 8
-mask = 63 :: Name
-#elif SIZEOF_HSINT == 4
-mask = 31 :: Name
-#endif
+mask :: Name
+mask = finiteBitSize (undefined :: Name) - 1
 {-# inline mask #-}
 
 -- What data structure would be nice for checking Miller pattern condition?
@@ -72,12 +69,13 @@ newtype Bloom = Bloom Name deriving (Eq, Ord, Bits, Num)
 instance Show Bloom where
   show b = show $ filter (`hasVar` b) [0..mask]
 
+
 addVar :: Name -> Bloom -> Bloom
-addVar i b = setBit b (i .&. mask)
+addVar i b = b .|. unsafeShiftL 1 (i .&. mask)
 {-# inline addVar #-}
 
 hasVar :: Name -> Bloom -> Bool
-hasVar i b = testBit b (i .&. mask)
+hasVar i b = (b .&. unsafeShiftL 1 (i .&. mask)) /= 0
 {-# inline hasVar #-}
 
 -- Note: we don't make any static distinction between normal
@@ -110,6 +108,29 @@ fromRaw t = runState (go HM.empty t) (0 :: Name) where
     i' <- get <* modify (+1)
     lam i' <$> go (HM.insert i i' m) t
 
+pretty :: Term -> String
+pretty = go False where
+
+  par True  x = "(" ++ x ++ ")"
+  par False x = x
+
+  spine :: Term -> Term -> [Term]
+  spine f x = go f [x] where
+    go (App _ f y) args = go f (y : args)
+    go t           args = t:args
+
+  lams :: Name -> Term -> ([Name], Term)
+  lams i t = first (i:) $ go t where
+    go (Lam _ i t) = first (i:) $ go t
+    go t           = ([], t)
+
+  go p (Var i)     = show i
+  go p (App _ f x) = par p (unwords $ map (go True) (spine f x))
+  go p (Lam _ i t) = par p ("lam " ++ unwords (map show args) ++ ". " ++ go False t')
+    where (args, t') = lams i t
+
+
+
 -- | Rename a free variable
 rename :: Name -> Name -> Term -> Term
 rename i i' = go where
@@ -129,27 +150,24 @@ rename i i' = go where
 -- | Substitute a normal term into a normal term, yielding a normal term.
 --   State contains a fresh name.
 hsubst :: IntSet -> Name -> Term -> Term -> State Name Term
-hsubst env !i t' = \case
+hsubst env !i !sub = \case
   v@(Var i')
-    | i == i'   -> pure t'
+    | i == i'   -> pure sub
     | otherwise -> pure v
   a@(App b f x)
-    | hasVar i b -> hsubst env i t' f >>= \case
+    | hasVar i b -> hsubst env i sub f >>= \case
         Lam b' i' t'
           | hasVar i' b' -> do
-              x' <- hsubst env i t' x
+              x' <- hsubst env i sub x
               hsubst env i' x' t'
           | otherwise -> pure t'
-        f' -> app f' <$> hsubst env i t' x
+        f' -> app f' <$> hsubst env i sub x
     | otherwise -> pure a
   l@(Lam _ i' t)
-    | i /= i' && hasVar i' (bloom t') && IS.member i' env -> do
+    | i /= i' && hasVar i' (bloom sub) && IS.member i' env -> do
         i'' <- get <* modify (+1)
-        hsubst (IS.insert i'' env) i t' (rename i' i'' t)
-    | otherwise -> pure l
-
--- Note: we're deliberately lazy in "env" and "t'",
--- because possibly we never have to compute them
+        hsubst (IS.insert i'' env) i sub (rename i' i'' t)
+    | otherwise -> lam i' <$> hsubst (IS.insert i' env) i sub t
 
 -- | Reduce to normal form.
 nf :: IntSet -> Term -> State Name Term
@@ -163,6 +181,73 @@ nf env (App _ f x) = nf env f >>= \case
   f' -> app f' <$> nf env x
 nf env (Lam b i t) = lam i <$> nf (IS.insert i env) t
 
+
+-- Note: we're deliberately lazy in "env"
+-- because it's possible we never have to compute it
+
+-- the only place where we possibly need "env" is when we
+-- check for capute in the "Lam" case.
+
+-- unfortunately, we can't be lazy in "t'" since we need to update the
+-- "Name" state correctly.
+
 nf0 :: (Term, Name) -> Term
 nf0 (t, n) = evalState (nf IS.empty t) n
+
+
+test = unlines [
+  "let z = lam s z.z in",
+  "let s = lam n s z. s (n s z) in",
+  "let plus = lam a b s z. a s (b s z) in",
+  "let mult = lam a b s z. a (b s) z in",
+  "mult (s (s z)) (s (s z))"
+  ]
+
+
+
+-- Debug versions
+------------------------------------------------------------
+
+-- hsubst :: IntSet -> Name -> Term -> Term -> State Name Term
+-- hsubst env !i !sub t = do
+--   res <- case t of
+--     v@(Var i')
+--       | i == i'   -> pure sub
+--       | otherwise -> pure v
+--     a@(App b f x)
+--       | hasVar i b -> hsubst env i sub f >>= \case
+--           Lam b' i' t'
+--             | hasVar i' b' -> do
+--                 x' <- hsubst env i sub x
+--                 hsubst env i' x' t'
+--             | otherwise -> pure t'
+--           f' -> app f' <$> hsubst env i sub x
+--       | otherwise -> pure a
+--     l@(Lam _ i' t)
+--       | i /= i' && hasVar i' (bloom sub) && IS.member i' env -> do
+--           i'' <- get <* modify (+1)
+--           hsubst (IS.insert i'' env) i sub (rename i' i'' t)
+--       | otherwise -> lam i' <$> hsubst (IS.insert i' env) i sub t
+--   traceM ""
+--   traceM ("subst result: " ++ pretty res)
+--   traceM ("subst var: " ++ show i ++ " term: " ++ pretty sub ++ " into: " ++ pretty t)
+--   pure res
+
+-- nf :: IntSet -> Term -> State Name Term
+-- nf env t = do
+--   res <- case t of
+--     v@(Var i)   -> pure v
+--     (App _ f x) -> nf env f >>= \case
+--       Lam b i t
+--         | hasVar i b -> do
+--             x' <- nf env x
+--             hsubst env i x' t
+--         | otherwise -> pure t
+--       f' -> app f' <$> nf env x
+--     (Lam b i t) -> lam i <$> nf (IS.insert i env) t
+--   traceM ""
+--   traceM ("nf  : " ++ pretty res)
+--   traceM ("term: " ++ pretty t)
+--   pure res
+
 

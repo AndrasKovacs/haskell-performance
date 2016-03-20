@@ -1,11 +1,10 @@
 module Main (
     main
-  , module Bloom
   ) where
 
-import Bloom
+import qualified Frontend as F
+import NBE
 
 main = pure ()
-
 
 
