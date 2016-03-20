@@ -6,6 +6,7 @@ Normalization by evaluation, with de Bruijn levels. Call-by-need.
 
 module NBE where
 
+import Control.Monad
 import Data.Maybe
 import qualified Data.HashMap.Strict as HM
 
@@ -29,6 +30,15 @@ fromRaw = go HM.empty 0 where
   go m  d (F.App f x) = App (go m d f) (go m d x)
   go m  d (F.Lam i t) = Lam (go (HM.insert i d m) (d + 1) t)
 
+toRaw :: Term -> F.RawTerm
+toRaw = go 0 HM.empty names where
+
+  names = do {x <- [1..]; replicateM x $ ['a'..'z'] ++ ['A'..'Z']}
+
+  go d m ns     (Var i)   = F.Var (m HM.! i)
+  go d m ns     (App f x) = F.App (go d m ns f) (go d m ns x)
+  go d m (n:ns) (Lam t)   = F.Lam n (go (d + 1) (HM.insert d n m) ns t)
+
 vapp :: Val -> Val -> Val
 vapp (VLam f) x = f x
 vapp f        x = VApp f x
@@ -49,12 +59,6 @@ quote = go 0 where
 nfList :: Term -> Term
 nfList = quote . evalList
 
-test = unlines [
-  "let z = lam s z.z in",
-  "let s = lam n s z. s (n s z) in",
-  "let plus = lam a b s z. a s (b s z) in",
-  "let mult = lam a b s z. a (b s) z in",
-  "mult (s (s z)) (s (s z))"
-  ]
-
+rawNf :: String -> Either String F.RawTerm
+rawNf = fmap (toRaw . nfList . fromRaw) . F.parse
 

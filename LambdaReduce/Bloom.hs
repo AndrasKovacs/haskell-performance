@@ -58,6 +58,44 @@ import Control.Monad.State.Strict
 
 type Name = Int
 
+-- Note: we don't make any static distinction between normal
+-- and reducible terms
+data Term
+  = Var !Name
+  | App {-# unpack #-} !Bloom !Term !Term
+  | Lam {-# unpack #-} !Bloom !Name !Term
+  deriving Show
+
+fromRaw :: F.RawTerm -> (Term, Name)
+fromRaw t = runState (go HM.empty t) (0 :: Name) where
+  go m (F.Var i)   = pure $ Var $ m HM.! i
+  go m (F.App f x) = app <$> go m f <*> go m x
+  go m (F.Lam i t) = do
+    i' <- get <* modify (+1)
+    lam i' <$> go (HM.insert i i' m) t
+
+toRaw :: Term -> F.RawTerm
+toRaw = go HM.empty names where
+
+  names = do {x <- [1..]; replicateM x $ ['a'..'z'] ++ ['A'..'Z']}
+
+  go m ns     (Var i)     = F.Var (m HM.! i)
+  go m ns     (App _ f x) = F.App (go m ns f) (go m ns x)
+  go m (n:ns) (Lam _ i t) = F.Lam n (go (HM.insert i n m) ns t)
+
+
+app :: Term -> Term -> Term
+app f x = App (bloom f .|. bloom x) f x
+{-# inline app #-}
+
+lam :: Name -> Term -> Term
+lam i t = Lam (bloom t) i t
+{-# inline lam #-}
+
+
+-- Bloom filter
+--------------------------------------------------------------------------------
+
 mask :: Name
 mask = finiteBitSize (undefined :: Name) - 1
 {-# inline mask #-}
@@ -69,7 +107,6 @@ newtype Bloom = Bloom Name deriving (Eq, Ord, Bits, Num)
 instance Show Bloom where
   show b = show $ filter (`hasVar` b) [0..mask]
 
-
 addVar :: Name -> Bloom -> Bloom
 addVar i b = b .|. unsafeShiftL 1 (i .&. mask)
 {-# inline addVar #-}
@@ -78,58 +115,14 @@ hasVar :: Name -> Bloom -> Bool
 hasVar i b = (b .&. unsafeShiftL 1 (i .&. mask)) /= 0
 {-# inline hasVar #-}
 
--- Note: we don't make any static distinction between normal
--- and non-normal terms
-data Term
-  = Var !Name
-  | App {-# unpack #-} !Bloom !Term !Term
-  | Lam {-# unpack #-} !Bloom !Name !Term
-  deriving Show
-
 bloom :: Term -> Bloom
 bloom (Var i)     = addVar i 0
 bloom (App b _ _) = b
 bloom (Lam b _ _) = b
 
--- | Smart constructors
-app :: Term -> Term -> Term
-app f x = App (bloom f .|. bloom x) f x
-{-# inline app #-}
 
-lam :: Name -> Term -> Term
-lam i t = Lam (bloom t) i t
-{-# inline lam #-}
-
-fromRaw :: F.RawTerm -> (Term, Name)
-fromRaw t = runState (go HM.empty t) (0 :: Name) where
-  go m (F.Var i)   = pure $ Var $ m HM.! i
-  go m (F.App f x) = app <$> go m f <*> go m x
-  go m (F.Lam i t) = do
-    i' <- get <* modify (+1)
-    lam i' <$> go (HM.insert i i' m) t
-
-pretty :: Term -> String
-pretty = go False where
-
-  par True  x = "(" ++ x ++ ")"
-  par False x = x
-
-  spine :: Term -> Term -> [Term]
-  spine f x = go f [x] where
-    go (App _ f y) args = go f (y : args)
-    go t           args = t:args
-
-  lams :: Name -> Term -> ([Name], Term)
-  lams i t = first (i:) $ go t where
-    go (Lam _ i t) = first (i:) $ go t
-    go t           = ([], t)
-
-  go p (Var i)     = show i
-  go p (App _ f x) = par p (unwords $ map (go True) (spine f x))
-  go p (Lam _ i t) = par p ("lam " ++ unwords (map show args) ++ ". " ++ go False t')
-    where (args, t') = lams i t
-
-
+-- Substitution
+--------------------------------------------------------------------------------
 
 -- | Rename a free variable
 rename :: Name -> Name -> Term -> Term
@@ -181,7 +174,6 @@ nf env (App _ f x) = nf env f >>= \case
   f' -> app f' <$> nf env x
 nf env (Lam b i t) = lam i <$> nf (IS.insert i env) t
 
-
 -- Note: we're deliberately lazy in "env"
 -- because it's possible we never have to compute it
 
@@ -194,19 +186,15 @@ nf env (Lam b i t) = lam i <$> nf (IS.insert i env) t
 nf0 :: (Term, Name) -> Term
 nf0 (t, n) = evalState (nf IS.empty t) n
 
-
-test = unlines [
-  "let z = lam s z.z in",
-  "let s = lam n s z. s (n s z) in",
-  "let plus = lam a b s z. a s (b s z) in",
-  "let mult = lam a b s z. a (b s) z in",
-  "mult (s (s z)) (s (s z))"
-  ]
+rawNf :: String -> Either String F.RawTerm
+rawNf = fmap (toRaw . nf0 . fromRaw) . F.parse
 
 
+-- Testing
+--------------------------------------------------------------------------------
 
--- Debug versions
-------------------------------------------------------------
+
+-- Debugging versions
 
 -- hsubst :: IntSet -> Name -> Term -> Term -> State Name Term
 -- hsubst env !i !sub t = do
