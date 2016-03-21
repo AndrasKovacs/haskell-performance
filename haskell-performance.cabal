@@ -40,14 +40,13 @@ executable lambda-reduce
   ghc-options:         -rtsopts -O2 -fllvm
 
   build-depends:       base
-                     , criterion
-                     , ghc-prim >= 0.4.0.0
-                     , bound
-                     , mtl
-                     , megaparsec
                      , containers
+                     , criterion
+                     , deepseq >= 1.4.1.1
+                     , ghc-prim >= 0.4.0.0
+                     , megaparsec
+                     , mtl
                      , unordered-containers
-                     , prelude-extras
 
   default-language:    Haskell2010
 
