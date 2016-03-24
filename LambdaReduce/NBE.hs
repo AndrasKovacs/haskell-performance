@@ -11,15 +11,29 @@ import Data.Maybe
 import qualified Data.HashMap.Strict as HM
 import Control.DeepSeq
 
+import qualified Data.IntMap as IM
+import qualified Data.Vector as V
+
 import qualified Frontend as F
+
+-- I'm using GADTs because I'm paranoid about extra copying
+-- The ADT version seems to be just so far, though
+
+-- data Term = Var !Int | App !Term Term | Lam !Term
+-- data Val = VVar !Int | VApp !Val Val | VLam !(Val -> Val)
+
+-- instance NFData Term where
+--   rnf (App f x) = rnf f `seq` rnf x
+--   rnf (Lam t)   = rnf t
+--   rnf (Var _)   = ()
 
 data Tag = Sem | Syn
 
 data Term' (t :: Tag) where
   Var  :: !Int -> Term' t
-  App  :: Term' t -> Term' t -> Term' t
-  Lam  :: Term' Syn -> Term' Syn
-  VLam :: (Term' Sem -> Term' Sem) -> Term' Sem
+  App  :: !(Term' t) -> (Term' t) -> Term' t
+  Lam  :: !(Term' Syn) -> Term' Syn
+  VLam :: !(Term' Sem -> Term' Sem) -> Term' Sem
 
 instance NFData (Term' t) where
   rnf (App f x) = rnf f `seq` rnf x
@@ -58,13 +72,14 @@ quote = go 0 where
   go !d (Var i)   = Var i
   go  d (VLam f)  = Lam (go (d + 1) (f (Var d)))
   go  d (App f x) = App (go d f) (go d x)
+{-# inline quote #-}  
 
--- We could use alternative structures for "env"
 evalList :: Term -> Val
 evalList = go [] 0 where
   go env !d (Var i)   = env !! (d - i - 1)
   go env  d (App f x) = go env d f $$ go env d x
   go env  d (Lam t)   = VLam $ \t' -> go (t':env) (d + 1) t
+{-# inline evalList #-}  
 
 nfList :: Term -> Term
 nfList = quote . evalList
@@ -76,4 +91,6 @@ rnfTest :: String -> ()
 rnfTest str = case F.parse str of
   Left  _ -> ()
   Right t -> rnf $ nfList (fromRaw t)
+
+
 

@@ -32,6 +32,9 @@ Of course this isn't an API we'd like to present. Ideally 'Bloom' filters should
 not be visible at all to programmers.
 -}
 
+-- TODO: benchmark this in comparison to hereditary subst without
+--       Bloom filters
+
 {-# language
   GeneralizedNewtypeDeriving, PatternSynonyms, BangPatterns,
   LambdaCase, FlexibleInstances, FlexibleContexts #-}
